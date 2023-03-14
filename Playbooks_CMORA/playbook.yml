@@ -1,0 +1,111 @@
+---
+- hosts: all
+  become: true
+  vars_files:
+    - vars/default.yml
+
+  tasks:
+    - name: Instalar prerequisitos
+      apt: name={{ item }} update_cache=yes state=latest force_apt_get=yes
+      loop: [ 'aptitude' ]
+
+  #Apache Configuration
+    - name: Instalar LAMP Packages
+      apt: name={{ item }} update_cache=yes state=latest
+      loop: [ 'apache2', 'mysql-server', 'python3-pymysql', 'php', 'php-mysql', 'libapache2-mod-php', 'mysql-client', 'python3-mysqldb' ]
+
+    - name: Crear documento root
+      file:
+        path: "/var/www/app{{ http_host }}"
+        state: directory
+        owner: "{{ app_user }}"
+        mode: '0755'
+
+    - name: configurar nuevo virtualhost
+      template:
+        src: "files/apache.conf.j2"
+        dest: "/etc/apache2/sites-available/{{ http_conf }}"
+      notify: Reload Apache
+
+    - name: habilitar el nuevo sitio
+      shell: /usr/sbin/a2ensite {{ http_conf }}
+      notify: Reload Apache
+
+    - name: Desahabilita el sitio preterminado de apache
+      shell: /usr/sbin/a2dissite 000-default.conf
+      when: disable_default
+      notify: Reload Apache
+ 
+  # MySQL Configuration
+    - name: Esteblecer un password la bd
+      ignore_errors: yes
+      mysql_user:
+        login_user: root
+        login_password: "root"
+        name: root
+        password: "{{ mysql_root_password }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Remover las cuentas anonimas de la base
+      mysql_user:
+        name: ''
+        host_all: yes
+        state: absent
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+    - name: Remover las base de datos de prueba
+      mysql_db:
+        name: test
+        state: absent
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+  # UFW Configuration
+    - name: "UFW - permitir acceso a http {{ http_port }}"
+      ufw:
+        rule: allow
+        port: "{{ http_port }}"
+        proto: tcp
+
+# PHP Info Page
+#    - name: Sets Up PHP Info Page
+#      template:
+#        src: "files/info.php.j2"
+#        dest: "/var/www/{{ http_host }}/info.php"
+
+ # Clonar repositorio de nuestra web app
+    - name: Clonar repositorio de nuestra web app
+      git:
+        repo: 'https://github.com/AlexFaick/Web-Cmora.git'
+        dest: "/var/www/app{{ http_host }}"
+
+    # Crear la base de datos
+    - name: Crear la base de datos
+      ignore_errors: yes
+      mysql_db:
+        name: user_db
+        state: present
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+  # Restaurar base de datos desde archivo
+    - name: Restaurar la base de datos desde .sql
+      ignore_errors: yes
+      mysql_db:
+        name: user_db
+        state: import
+        target: /var/www/app{{ http_host }}/base de datos/datos.sql
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+  handlers:
+    - name: Reload Apache
+      service:
+        name: apache2
+        state: reloaded
+
+    - name: Restart Apache
+      service:
+        name: apache2
+        state: restarted
